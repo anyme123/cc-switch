@@ -58,6 +58,8 @@ const McpPanel: React.FC<McpPanelProps> = ({ onClose, onNotify, appType }) => {
           await window.api.importMcpFromClaude();
         } else if (appType === "codex") {
           await window.api.importMcpFromCodex();
+        } else if (appType === "droid") {
+          await window.api.importMcpFromDroid();
         }
       } catch (e) {
         console.warn("MCP 初始化导入失败（忽略继续）", e);

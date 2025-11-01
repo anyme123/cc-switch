@@ -503,6 +503,16 @@ export const tauriAPI = {
     }
   },
 
+  // 从 Droid 导入 MCP 配置
+  importMcpFromDroid: async (): Promise<boolean> => {
+    try {
+      return await invoke("import_mcp_from_droid");
+    } catch (error) {
+      console.error("从 Droid 导入 MCP 失败:", error);
+      throw error;
+    }
+  },
+
   // 同步已启用的 MCP 到 Claude
   syncEnabledMcpToClaude: async (): Promise<boolean> => {
     try {
@@ -519,6 +529,16 @@ export const tauriAPI = {
       return await invoke("sync_enabled_mcp_to_codex");
     } catch (error) {
       console.error("同步 MCP 到 Codex 失败:", error);
+      throw error;
+    }
+  },
+
+  // 同步已启用的 MCP 到 Droid
+  syncEnabledMcpToDroid: async (): Promise<boolean> => {
+    try {
+      return await invoke("sync_enabled_mcp_to_droid");
+    } catch (error) {
+      console.error("同步 MCP 到 Droid 失败:", error);
       throw error;
     }
   },
