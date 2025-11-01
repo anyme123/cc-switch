@@ -50,6 +50,9 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     language: persistedLanguage,
     autoStart: false,
     globalShortcut: undefined,
+    autoRefreshBalance: false,
+    refreshInterval: 300,
+    refreshOnlyWhenVisible: true,
   });
   const [initialLanguage, setInitialLanguage] = useState<"zh" | "en">(
     persistedLanguage,
@@ -121,6 +124,18 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
           typeof (loadedSettings as any)?.globalShortcut === "string"
             ? (loadedSettings as any).globalShortcut
             : undefined,
+        autoRefreshBalance:
+          typeof (loadedSettings as any)?.autoRefreshBalance === "boolean"
+            ? (loadedSettings as any).autoRefreshBalance
+            : false,
+        refreshInterval:
+          typeof (loadedSettings as any)?.refreshInterval === "number"
+            ? (loadedSettings as any).refreshInterval
+            : 300,
+        refreshOnlyWhenVisible:
+          typeof (loadedSettings as any)?.refreshOnlyWhenVisible === "boolean"
+            ? (loadedSettings as any).refreshOnlyWhenVisible
+            : true,
       });
       setInitialLanguage(storedLanguage);
       if (i18n.language !== storedLanguage) {
@@ -190,6 +205,13 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
       if (i18n.language !== selectedLanguage) {
         void i18n.changeLanguage(selectedLanguage);
       }
+
+      // 触发自定义事件，通知其他组件设置已更新
+      console.log('[SettingsModal] 设置已保存，触发 settings-updated 事件');
+      window.dispatchEvent(new CustomEvent('settings-updated', {
+        detail: payload
+      }));
+
       onClose();
     } catch (error) {
       console.error(t("console.saveSettingsFailed"), error);
@@ -490,6 +512,88 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
                 {t("settings.globalShortcutExamples")}
               </p>
+            </div>
+          </div>
+
+          {/* Droid 自动刷新设置 */}
+          <div>
+            <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-3">
+              {t("settings.autoRefresh")}
+            </h3>
+            <div className="space-y-3">
+              <label className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm text-gray-900 dark:text-gray-100">
+                    {t("settings.enableAutoRefresh")}
+                  </span>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    {t("settings.autoRefreshDescription")}
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={settings.autoRefreshBalance}
+                  onChange={(e) =>
+                    setSettings((prev) => ({
+                      ...prev,
+                      autoRefreshBalance: e.target.checked,
+                    }))
+                  }
+                  className="w-4 h-4 text-blue-500 rounded focus:ring-blue-500/20"
+                />
+              </label>
+
+              {settings.autoRefreshBalance && (
+                <>
+                  <div>
+                    <label className="block text-sm text-gray-900 dark:text-gray-100 mb-2">
+                      {t("settings.refreshInterval")}
+                    </label>
+                    <select
+                      value={settings.refreshInterval}
+                      onChange={(e) =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          refreshInterval: parseInt(e.target.value, 10),
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+                    >
+                      <option value="60">{t("settings.interval1Min")}</option>
+                      <option value="180">{t("settings.interval3Min")}</option>
+                      <option value="300">{t("settings.interval5Min")}</option>
+                      <option value="600">{t("settings.interval10Min")}</option>
+                      <option value="900">{t("settings.interval15Min")}</option>
+                      <option value="1800">{t("settings.interval30Min")}</option>
+                    </select>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      {t("settings.refreshIntervalDescription")}
+                    </p>
+                  </div>
+
+                  <label className="flex items-center justify-between">
+                    <div>
+                      <span className="text-sm text-gray-900 dark:text-gray-100">
+                        {t("settings.refreshOnlyWhenVisible")}
+                      </span>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        {t("settings.refreshOnlyWhenVisibleDescription")}
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={settings.refreshOnlyWhenVisible}
+                      onChange={(e) =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          refreshOnlyWhenVisible: e.target.checked,
+                        }))
+                      }
+                      className="w-4 h-4 text-blue-500 rounded focus:ring-blue-500/20"
+                    />
+                  </label>
+                </>
+              )}
             </div>
           </div>
 

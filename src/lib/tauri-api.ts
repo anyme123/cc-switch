@@ -35,6 +35,7 @@ export interface BalanceInfo {
   usedRatio: number;
   percentUsed: number;
   exceeded: boolean;
+  expiryDate?: string;
 }
 
 // Tauri API 封装，提供统一的全局 API 接口

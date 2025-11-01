@@ -5,6 +5,7 @@ mod codex_config;
 mod commands;
 mod config;
 mod droid_config;
+mod factory_mcp;
 mod mcp;
 mod migration;
 mod provider;
@@ -888,8 +889,10 @@ pub fn run() {
             commands::set_mcp_enabled,
             commands::import_mcp_from_claude,
             commands::import_mcp_from_codex,
+            commands::import_mcp_from_droid,
             commands::sync_enabled_mcp_to_claude,
             commands::sync_enabled_mcp_to_codex,
+            commands::sync_enabled_mcp_to_droid,
             commands::check_mcp_sync_conflict,
             commands::sync_mcp_to_other_app,
             commands::get_settings,

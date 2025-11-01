@@ -486,33 +486,31 @@ pub async fn switch_provider(
                 serde_json::json!({})
             };
 
-            // 更新 env 中的 API 配置字段和模型配置
+            // 更新 env 中的所有配置字段（支持任意环境变量）
             if let Some(provider_env) = provider.settings_config.get("env") {
                 if let Some(config_obj) = final_config.as_object_mut() {
                     // 获取或创建 env 对象
                     let env = config_obj.entry("env").or_insert(serde_json::json!({}));
                     if let Some(env_obj) = env.as_object_mut() {
-                        // 更新 API 认证字段
-                        if let Some(token) = provider_env.get("ANTHROPIC_AUTH_TOKEN") {
-                            env_obj.insert("ANTHROPIC_AUTH_TOKEN".to_string(), token.clone());
+                        // 清除旧供应商的特有变量（避免配置污染）
+                        if !manager.current.is_empty() {
+                            if let Some(old_provider) = manager.providers.get(&manager.current) {
+                                if let Some(old_env) = old_provider.settings_config.get("env") {
+                                    if let Some(old_env_obj) = old_env.as_object() {
+                                        // 删除旧供应商的所有环境变量
+                                        for key in old_env_obj.keys() {
+                                            env_obj.remove(key);
+                                        }
+                                    }
+                                }
+                            }
                         }
-                        if let Some(base_url) = provider_env.get("ANTHROPIC_BASE_URL") {
-                            env_obj.insert("ANTHROPIC_BASE_URL".to_string(), base_url.clone());
-                        }
-                        
-                        // 更新模型配置（如果供应商有配置）
-                        if let Some(model) = provider_env.get("ANTHROPIC_MODEL") {
-                            env_obj.insert("ANTHROPIC_MODEL".to_string(), model.clone());
-                        } else {
-                            // 如果新供应商没有配置模型，移除旧的模型配置
-                            env_obj.remove("ANTHROPIC_MODEL");
-                        }
-                        
-                        if let Some(small_model) = provider_env.get("ANTHROPIC_SMALL_FAST_MODEL") {
-                            env_obj.insert("ANTHROPIC_SMALL_FAST_MODEL".to_string(), small_model.clone());
-                        } else {
-                            // 如果新供应商没有配置小模型，移除旧的配置
-                            env_obj.remove("ANTHROPIC_SMALL_FAST_MODEL");
+
+                        // 动态遍历新供应商的所有环境变量并添加
+                        if let Some(provider_env_obj) = provider_env.as_object() {
+                            for (key, value) in provider_env_obj {
+                                env_obj.insert(key.clone(), value.clone());
+                            }
                         }
                     }
                 }
@@ -1126,16 +1124,32 @@ pub async fn get_autostart_status(app: tauri::AppHandle) -> Result<bool, String>
 pub async fn set_autostart(app: tauri::AppHandle, enable: bool) -> Result<bool, String> {
     let autostart_manager = app.autolaunch();
 
+    log::info!("尝试{}开机自启动", if enable { "启用" } else { "禁用" });
+
     if enable {
-        autostart_manager
-            .enable()
-            .map_err(|e| format!("启用开机自启动失败: {}", e))?;
-        log::info!("已启用开机自启动");
+        match autostart_manager.enable() {
+            Ok(_) => {
+                log::info!("✅ 已启用开机自启动");
+                // 验证是否真的启用了
+                match autostart_manager.is_enabled() {
+                    Ok(true) => log::info!("验证成功：开机自启动已启用"),
+                    Ok(false) => log::warn!("⚠️ 警告：启用命令执行成功，但验证显示未启用"),
+                    Err(e) => log::warn!("⚠️ 无法验证自启动状态: {}", e),
+                }
+            }
+            Err(e) => {
+                log::error!("❌ 启用开机自启动失败: {}", e);
+                return Err(format!("启用开机自启动失败: {}", e));
+            }
+        }
     } else {
-        autostart_manager
-            .disable()
-            .map_err(|e| format!("禁用开机自启动失败: {}", e))?;
-        log::info!("已禁用开机自启动");
+        match autostart_manager.disable() {
+            Ok(_) => log::info!("✅ 已禁用开机自启动"),
+            Err(e) => {
+                log::error!("❌ 禁用开机自启动失败: {}", e);
+                return Err(format!("禁用开机自启动失败: {}", e));
+            }
+        }
     }
 
     Ok(true)
@@ -1382,7 +1396,7 @@ pub async fn upsert_mcp_server_in_config(
                 crate::mcp::sync_enabled_to_codex(&cfg)?;
             }
             crate::app_config::AppType::Droid => {
-                // Droid 暂不支持 MCP 同步
+                crate::mcp::sync_enabled_to_droid(&cfg)?;
             }
         }
         log::info!("已自动同步已启用的 MCP '{}' 到 live 配置", id);
@@ -1499,6 +1513,38 @@ pub async fn import_mcp_from_codex(state: State<'_, AppState>) -> Result<usize, 
         .lock()
         .map_err(|e| format!("获取锁失败: {}", e))?;
     let changed = crate::mcp::import_from_codex(&mut cfg)?;
+    drop(cfg);
+    if changed > 0 {
+        state.save()?;
+    }
+    Ok(changed)
+}
+
+/// 手动同步：将启用的 MCP 投影到 ~/.factory/mcp.json（不更改 config.json）
+#[tauri::command]
+pub async fn sync_enabled_mcp_to_droid(state: State<'_, AppState>) -> Result<bool, String> {
+    let mut cfg = state
+        .config
+        .lock()
+        .map_err(|e| format!("获取锁失败: {}", e))?;
+    let normalized = crate::mcp::normalize_servers_for(&mut cfg, &AppType::Droid);
+    crate::mcp::sync_enabled_to_droid(&cfg)?;
+    let need_save = normalized > 0;
+    drop(cfg);
+    if need_save {
+        state.save()?;
+    }
+    Ok(true)
+}
+
+/// 从 ~/.factory/mcp.json 导入 MCP 定义到 config.json，返回变更数量
+#[tauri::command]
+pub async fn import_mcp_from_droid(state: State<'_, AppState>) -> Result<usize, String> {
+    let mut cfg = state
+        .config
+        .lock()
+        .map_err(|e| format!("获取锁失败: {}", e))?;
+    let changed = crate::mcp::import_from_droid(&mut cfg)?;
     drop(cfg);
     if changed > 0 {
         state.save()?;

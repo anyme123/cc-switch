@@ -55,6 +55,12 @@ export interface Settings {
   autoStart: boolean;
   // 全局快捷键
   globalShortcut?: string;
+  // Droid 余额自动刷新
+  autoRefreshBalance: boolean;
+  // 刷新间隔（秒）
+  refreshInterval: number;
+  // 仅在窗口可见时刷新
+  refreshOnlyWhenVisible: boolean;
 }
 
 // MCP 服务器连接参数（宽松：允许扩展字段）

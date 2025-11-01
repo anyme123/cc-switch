@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCw, AlertTriangle, CheckCircle } from "lucide-react";
 import type { BalanceInfo } from "../lib/tauri-api";
@@ -40,6 +39,22 @@ export function BalanceDisplay({
     if (hours < 24) return t("droid.hoursAgo", { hours });
     const days = Math.floor(hours / 24);
     return t("droid.daysAgo", { days });
+  };
+
+  // 格式化到期日期
+  const formatExpiryDate = (dateStr: string) => {
+    try {
+      const date = new Date(dateStr);
+      return date.toLocaleString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch (e) {
+      return dateStr;
+    }
   };
 
   // 获取进度条颜色
@@ -176,6 +191,14 @@ export function BalanceDisplay({
           <span className="font-medium text-gray-700 dark:text-gray-300">{formatM(balance.allowance)}</span>
         </div>
       </div>
+
+      {/* 到期时间 */}
+      {balance.expiryDate && (
+        <div className="text-xs">
+          <span className="text-gray-500 dark:text-gray-400">{t("droid.expiryDate")}: </span>
+          <span className="font-medium text-gray-700 dark:text-gray-300">{formatExpiryDate(balance.expiryDate)}</span>
+        </div>
+      )}
 
       {/* 超额信息 */}
       {exceeded && balance.overage > 0 && (

@@ -309,7 +309,8 @@ pub fn set_enabled_and_sync_for(
             sync_enabled_to_codex(config)?;
         }
         AppType::Droid => {
-            // Droid 暂不支持 MCP 同步
+            // 将启用项投影到 ~/.factory/mcp.json
+            sync_enabled_to_droid(config)?;
         }
     }
     Ok(true)
@@ -829,4 +830,87 @@ pub fn is_mcp_enabled(config: &MultiAppConfig, app: &AppType, id: &str) -> bool 
         .and_then(|entry| entry.get("enabled"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
+}
+
+// =====================
+// Droid/Factory MCP 功能
+// =====================
+
+/// 将 config.json 中 enabled==true 的项投影写入 ~/.factory/mcp.json
+pub fn sync_enabled_to_droid(config: &MultiAppConfig) -> Result<(), String> {
+    let enabled = collect_enabled_servers(&config.mcp.droid);
+    crate::factory_mcp::set_mcp_servers_map(&enabled)
+}
+
+/// 从 ~/.factory/mcp.json 导入 mcpServers 到 config.json（设为 enabled=true）。
+/// 已存在的项仅强制 enabled=true，不覆盖其他字段。
+pub fn import_from_droid(config: &mut MultiAppConfig) -> Result<usize, String> {
+    let text_opt = crate::factory_mcp::read_mcp_json()?;
+    let Some(text) = text_opt else { return Ok(0) };
+    let mut changed = normalize_servers_for(config, &AppType::Droid);
+    let v: Value =
+        serde_json::from_str(&text).map_err(|e| format!("解析 ~/.factory/mcp.json 失败: {}", e))?;
+    let Some(map) = v.get("mcpServers").and_then(|x| x.as_object()) else {
+        return Ok(changed);
+    };
+
+    for (id, spec) in map.iter() {
+        // 校验目标 spec
+        validate_server_spec(spec)?;
+
+        let entry = config
+            .mcp_for_mut(&AppType::Droid)
+            .servers
+            .entry(id.clone());
+        use std::collections::hash_map::Entry;
+        match entry {
+            Entry::Vacant(vac) => {
+                let mut obj = serde_json::Map::new();
+                obj.insert(String::from("id"), json!(id));
+                obj.insert(String::from("name"), json!(id));
+                obj.insert(String::from("server"), spec.clone());
+                obj.insert(String::from("enabled"), json!(true));
+                vac.insert(Value::Object(obj));
+                changed += 1;
+            }
+            Entry::Occupied(mut occ) => {
+                let value = occ.get_mut();
+                let Some(existing) = value.as_object_mut() else {
+                    log::warn!("MCP 条目 '{}' 不是 JSON 对象，覆盖为导入数据", id);
+                    let mut obj = serde_json::Map::new();
+                    obj.insert(String::from("id"), json!(id));
+                    obj.insert(String::from("name"), json!(id));
+                    obj.insert(String::from("server"), spec.clone());
+                    obj.insert(String::from("enabled"), json!(true));
+                    occ.insert(Value::Object(obj));
+                    changed += 1;
+                    continue;
+                };
+
+                let mut modified = false;
+                let prev_enabled = existing
+                    .get("enabled")
+                    .and_then(|b| b.as_bool())
+                    .unwrap_or(false);
+                if !prev_enabled {
+                    existing.insert(String::from("enabled"), json!(true));
+                    modified = true;
+                }
+                if existing.get("server").is_none() {
+                    log::warn!("MCP 条目 '{}' 缺少 server 字段，覆盖为导入数据", id);
+                    existing.insert(String::from("server"), spec.clone());
+                    modified = true;
+                }
+                if existing.get("id").is_none() {
+                    log::warn!("MCP 条目 '{}' 缺少 id 字段，自动填充", id);
+                    existing.insert(String::from("id"), json!(id));
+                    modified = true;
+                }
+                if modified {
+                    changed += 1;
+                }
+            }
+        }
+    }
+    Ok(changed)
 }

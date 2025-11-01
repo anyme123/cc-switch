@@ -101,4 +101,23 @@ export const providerPresets: ProviderPreset[] = [
     },
     category: "third_party",
   },
+  {
+    name: "MiniMax",
+    websiteUrl: "https://platform.minimaxi.com/docs/guides/text-ai-coding-tools",
+    apiKeyUrl: "https://platform.minimaxi.com",
+    settingsConfig: {
+      env: {
+        ANTHROPIC_BASE_URL: "https://api.minimaxi.com/anthropic",
+        ANTHROPIC_AUTH_TOKEN: "",
+        API_TIMEOUT_MS: "3000000",
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        ANTHROPIC_MODEL: "MiniMax-M2",
+        ANTHROPIC_SMALL_FAST_MODEL: "MiniMax-M2",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "MiniMax-M2",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "MiniMax-M2",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "MiniMax-M2",
+      },
+    },
+    category: "cn_official",
+  },
 ];

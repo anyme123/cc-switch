@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { Provider } from "../types";
 import { Play, Edit3, Trash2, CheckCircle2, Users, Check, Zap, Loader2 } from "lucide-react";
 import { buttonStyles, cardStyles, badgeStyles, cn } from "../lib/styles";
-import { AppType, EndpointLatency, BalanceInfo } from "../lib/tauri-api";
+import { AppType, EndpointLatency, BalanceInfo, tauriAPI } from "../lib/tauri-api";
 import { BalanceDisplay } from "./BalanceDisplay";
 import {
   applyProviderToVSCode,
@@ -12,6 +12,7 @@ import {
 } from "../utils/vscodeSettings";
 import { getCodexBaseUrl } from "../utils/providerConfigUtils";
 import { useVSCodeAutoSync } from "../hooks/useVSCodeAutoSync";
+import { useAutoRefresh } from "../hooks/useAutoRefresh";
 // 不再在列表中显示分类徽章，避免造成困惑
 
 interface ProviderListProps {
@@ -243,6 +244,63 @@ const ProviderList: React.FC<ProviderListProps> = ({
   const [checkingBalance, setCheckingBalance] = useState<string | null>(null);
   const [balanceErrors, setBalanceErrors] = useState<Record<string, string>>({});
 
+  // 自动刷新相关状态
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(false);
+  const [refreshInterval, setRefreshInterval] = useState(300);
+  const [refreshOnlyWhenVisible, setRefreshOnlyWhenVisible] = useState(true);
+
+  // 加载自动刷新设置
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const settings = await tauriAPI.getSettings();
+        const newEnabled = settings.autoRefreshBalance || false;
+        const newInterval = settings.refreshInterval || 300;
+        const newVisible = settings.refreshOnlyWhenVisible !== false;
+
+        setAutoRefreshEnabled(newEnabled);
+        setRefreshInterval(newInterval);
+        setRefreshOnlyWhenVisible(newVisible);
+
+        console.log('[ProviderList] 设置已加载:', {
+          autoRefreshEnabled: newEnabled,
+          refreshInterval: newInterval,
+          refreshOnlyWhenVisible: newVisible,
+        });
+      } catch (error) {
+        console.error('[ProviderList] 加载设置失败:', error);
+      }
+    };
+
+    // 初始加载
+    loadSettings();
+
+    // 监听设置更新事件（设置保存后立即生效）
+    const handleSettingsUpdated = (event: Event) => {
+      console.log('[ProviderList] 收到 settings-updated 事件，立即重新加载设置');
+      const customEvent = event as CustomEvent;
+      if (customEvent.detail) {
+        // 直接使用事件中的设置数据，更快
+        const settings = customEvent.detail;
+        setAutoRefreshEnabled(settings.autoRefreshBalance || false);
+        setRefreshInterval(settings.refreshInterval || 300);
+        setRefreshOnlyWhenVisible(settings.refreshOnlyWhenVisible !== false);
+        console.log('[ProviderList] 设置已更新（来自事件）:', {
+          autoRefreshEnabled: settings.autoRefreshBalance || false,
+          refreshInterval: settings.refreshInterval || 300,
+        });
+      } else {
+        // 如果事件中没有数据，从后端重新加载
+        loadSettings();
+      }
+    };
+
+    window.addEventListener('settings-updated', handleSettingsUpdated);
+    return () => {
+      window.removeEventListener('settings-updated', handleSettingsUpdated);
+    };
+  }, []);
+
   // 处理测速
   const handleTestSpeed = async (provider: Provider) => {
     const url = getApiUrl(provider);
@@ -339,6 +397,97 @@ const ProviderList: React.FC<ProviderListProps> = ({
       setCheckingBalance(null);
     }
   };
+
+  // 批量刷新所有Droid provider的余额
+  const handleRefreshAllBalances = useCallback(async () => {
+    if (appType !== "droid") return;
+
+    const droidProviders = Object.values(providers).filter(
+      p => p.settingsConfig?.apiKey
+    );
+
+    if (droidProviders.length === 0) {
+      console.log('[ProviderList] 没有配置API Key的provider');
+      return;
+    }
+
+    console.log(`[ProviderList] 批量刷新 ${droidProviders.length} 个provider的余额（使用批量API，限流200ms/个）`);
+
+    // 收集所有API Keys，并建立 apiKey -> providerId 的映射
+    const apiKeyToProviderId: Record<string, string> = {};
+    const apiKeys: string[] = [];
+
+    droidProviders.forEach(provider => {
+      const apiKey = provider.settingsConfig?.apiKey;
+      if (apiKey) {
+        apiKeys.push(apiKey);
+        apiKeyToProviderId[apiKey] = provider.id;
+      }
+    });
+
+    try {
+      // 使用后端的批量查询API（内置200ms限流）
+      const results = await window.api.batchCheckDroidBalances(apiKeys);
+      console.log(`[ProviderList] 批量查询完成，成功 ${Object.keys(results).length}/${apiKeys.length} 个`);
+
+      // 更新每个provider的余额
+      Object.entries(results).forEach(([apiKey, balance]) => {
+        const providerId = apiKeyToProviderId[apiKey];
+        if (providerId) {
+          setBalances((prev) => ({
+            ...prev,
+            [providerId]: balance,
+          }));
+          setBalanceLastChecked((prev) => ({
+            ...prev,
+            [providerId]: Date.now(),
+          }));
+          // 清除错误
+          setBalanceErrors((prev) => {
+            const newErrors = { ...prev };
+            delete newErrors[providerId];
+            return newErrors;
+          });
+        }
+      });
+
+      // 检查是否有失败的
+      const failedKeys = apiKeys.filter(key => !results[key]);
+      if (failedKeys.length > 0) {
+        console.warn(`[ProviderList] ${failedKeys.length} 个provider查询失败`);
+        failedKeys.forEach(apiKey => {
+          const providerId = apiKeyToProviderId[apiKey];
+          if (providerId) {
+            setBalanceErrors((prev) => ({
+              ...prev,
+              [providerId]: "查询失败",
+            }));
+          }
+        });
+      }
+    } catch (error: any) {
+      console.error('[ProviderList] 批量查询余额失败:', error);
+      // 为所有provider设置错误
+      droidProviders.forEach(provider => {
+        setBalanceErrors((prev) => ({
+          ...prev,
+          [provider.id]: error?.message || "批量查询失败",
+        }));
+      });
+    }
+  }, [appType, providers]);
+
+  // 统一的自动刷新Hook（只在Droid应用中启用）
+  const { resetErrors } = useAutoRefresh({
+    enabled: appType === "droid" && autoRefreshEnabled,
+    interval: refreshInterval,
+    onlyWhenVisible: refreshOnlyWhenVisible,
+    onRefresh: handleRefreshAllBalances,
+    onError: (error) => {
+      console.error('[ProviderList] 自动刷新错误:', error);
+    },
+    storageKey: 'droid-balance-refresh-time', // 使用独立的key
+  });
 
   // 根据延迟返回颜色类
   const getLatencyColor = (latency: number | null): string => {

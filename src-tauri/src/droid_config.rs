@@ -12,6 +12,8 @@ pub struct BalanceInfo {
     pub used_ratio: f64,
     pub percent_used: f64,
     pub exceeded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expiry_date: Option<String>,
 }
 
 /// Factory.ai API 响应结构
@@ -21,8 +23,11 @@ struct FactoryApiResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Usage {
     standard: StandardUsage,
+    #[serde(rename = "endDate")]
+    end_date: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -318,8 +323,20 @@ pub async fn check_balance(api_key: &str) -> Result<BalanceInfo, String> {
     let percent_used = usage.used_ratio * 100.0;
     let exceeded = usage.used_ratio > 1.0;
 
-    log::info!("余额查询成功: 已用 {}, 总配额 {}, 剩余 {}", 
+    // 提取到期时间：endDate字段（Unix时间戳，毫秒）
+    let expiry_date = api_response.usage.end_date.map(|timestamp| {
+        // 将毫秒时间戳转换为ISO格式字符串
+        use chrono::{Utc, TimeZone};
+        let datetime = Utc.timestamp_millis_opt(timestamp).unwrap();
+        datetime.to_rfc3339()
+    });
+
+    log::info!("余额查询成功: 已用 {}, 总配额 {}, 剩余 {}",
         usage.user_tokens, usage.total_allowance, remaining);
+
+    if let Some(ref expiry) = expiry_date {
+        log::info!("到期时间: {}", expiry);
+    }
 
     Ok(BalanceInfo {
         used: usage.user_tokens,
@@ -329,6 +346,7 @@ pub async fn check_balance(api_key: &str) -> Result<BalanceInfo, String> {
         used_ratio: usage.used_ratio,
         percent_used,
         exceeded,
+        expiry_date,
     })
 }
 
