@@ -284,18 +284,28 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
     }
   };
 
-  // v3.5.1: 执行同步到另一应用
+  // v3.5.1+: 执行同步到目标应用（三向同步：Claude ↔ Codex ↔ Droid）
   const performSync = async (id: string, overwrite: boolean) => {
     try {
+      // 确定目标应用
+      const targetApp =
+        appType === "claude" ? "codex" :
+        appType === "codex" ? "claude" :
+        "claude"; // Droid 默认同步到 Claude
+
       const synced = await window.api.syncMcpToOtherApp(
         appType,
+        targetApp,
         id,
         overwrite,
       );
       if (synced) {
-        const targetApp = appType === "claude" ? "Codex" : "Claude Code";
+        const targetAppName =
+          targetApp === "claude" ? "Claude Code" :
+          targetApp === "codex" ? "Codex" :
+          "Droid";
         onNotify?.(
-          t("mcp.msg.synced", { targetApp }),
+          t("mcp.msg.synced", { targetApp: targetAppName }),
           "success",
           3000,
         );
@@ -438,12 +448,18 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
       // 显式等待父组件保存流程
       await onSave(trimmedId, entry);
 
-      // v3.5.1: 保存成功后执行双端同步（仅编辑模式）
+      // v3.5.1+: 保存成功后执行双端同步（仅编辑模式）
       if (isEditing && syncToOtherApp) {
         try {
           setSyncChecking(true);
+          // 确定目标应用
+          const targetApp =
+            appType === "claude" ? "codex" :
+            appType === "codex" ? "claude" :
+            "claude"; // Droid 默认同步到 Claude
+
           const hasConflict = await window.api.checkMcpSyncConflict(
-            appType,
+            targetApp,
             trimmedId,
           );
 

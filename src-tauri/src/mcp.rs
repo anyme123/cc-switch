@@ -739,26 +739,21 @@ pub fn sync_enabled_to_codex(config: &MultiAppConfig) -> Result<(), String> {
 // v3.5.1 新增：MCP 配置双端同步功能
 // =====================
 
-/// 检查另一个应用中是否存在同名 MCP 服务器
-pub fn check_mcp_exists_in_other_app(
+/// 检查目标应用中是否存在同名 MCP 服务器
+pub fn check_mcp_exists_in_target_app(
     config: &MultiAppConfig,
-    source_app: &AppType,
+    target_app: &AppType,
     id: &str,
 ) -> bool {
-    let target_app = match source_app {
-        AppType::Claude => AppType::Codex,
-        AppType::Codex => AppType::Claude,
-        AppType::Droid => AppType::Claude, // Droid 默认同步到 Claude
-    };
-
-    config.mcp_for(&target_app).servers.contains_key(id)
+    config.mcp_for(target_app).servers.contains_key(id)
 }
 
-/// 将 MCP 服务器配置复制到另一个应用（双端同步）
+/// 将 MCP 服务器配置复制到目标应用（三向同步：Claude ↔ Codex ↔ Droid）
 ///
 /// # 参数
 /// - `config`: 应用配置
-/// - `source_app`: 源应用类型 (Claude 或 Codex)
+/// - `source_app`: 源应用类型 (Claude、Codex 或 Droid)
+/// - `target_app`: 目标应用类型 (Claude、Codex 或 Droid)
 /// - `id`: MCP 服务器 ID
 /// - `overwrite`: 是否覆盖已存在的同名配置
 ///
@@ -766,13 +761,19 @@ pub fn check_mcp_exists_in_other_app(
 /// - `Ok(true)`: 成功复制（新增或覆盖）
 /// - `Ok(false)`: 目标已存在且不覆盖
 /// - `Err`: 复制失败
-pub fn copy_mcp_to_other_app(
+pub fn copy_mcp_to_target_app(
     config: &mut MultiAppConfig,
     source_app: &AppType,
+    target_app: &AppType,
     id: &str,
     overwrite: bool,
 ) -> Result<bool, String> {
-    // 1. 从源应用获取 MCP 配置
+    // 1. 验证源和目标不能相同
+    if source_app == target_app {
+        return Err(format!("源应用和目标应用不能相同: {:?}", source_app));
+    }
+
+    // 2. 从源应用获取 MCP 配置
     let source_entry = config
         .mcp_for(source_app)
         .servers
@@ -780,15 +781,8 @@ pub fn copy_mcp_to_other_app(
         .ok_or_else(|| format!("源 MCP 服务器 '{}' 不存在", id))?
         .clone();
 
-    // 2. 确定目标应用
-    let target_app = match source_app {
-        AppType::Claude => AppType::Codex,
-        AppType::Codex => AppType::Claude,
-        AppType::Droid => AppType::Claude, // Droid 默认同步到 Claude
-    };
-
     // 3. 检查目标应用是否已存在同名配置
-    let exists = config.mcp_for(&target_app).servers.contains_key(id);
+    let exists = config.mcp_for(target_app).servers.contains_key(id);
     if exists && !overwrite {
         return Ok(false);
     }
@@ -806,7 +800,7 @@ pub fn copy_mcp_to_other_app(
     }
 
     config
-        .mcp_for_mut(&target_app)
+        .mcp_for_mut(target_app)
         .servers
         .insert(id.to_string(), target_entry);
 

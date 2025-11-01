@@ -523,26 +523,27 @@ export const tauriAPI = {
     }
   },
 
-  // v3.5.1: 检查 MCP 双端同步冲突
-  checkMcpSyncConflict: async (app: AppType, id: string): Promise<boolean> => {
+  // v3.5.1: 检查目标应用中是否存在同名 MCP 服务器
+  checkMcpSyncConflict: async (targetApp: AppType, id: string): Promise<boolean> => {
     try {
-      return await invoke("check_mcp_sync_conflict", { app, id });
+      return await invoke("check_mcp_sync_conflict", { targetApp, id });
     } catch (error) {
       console.error("检查 MCP 同步冲突失败:", error);
       throw error;
     }
   },
 
-  // v3.5.1: 同步 MCP 到另一应用
+  // v3.5.1+: 同步 MCP 到目标应用（三向同步：Claude ↔ Codex ↔ Droid）
   syncMcpToOtherApp: async (
-    app: AppType,
+    sourceApp: AppType,
+    targetApp: AppType,
     id: string,
     overwrite: boolean,
   ): Promise<boolean> => {
     try {
-      return await invoke("sync_mcp_to_other_app", { app, id, overwrite });
+      return await invoke("sync_mcp_to_other_app", { sourceApp, targetApp, id, overwrite });
     } catch (error) {
-      console.error("同步 MCP 到另一应用失败:", error);
+      console.error("同步 MCP 到目标应用失败:", error);
       throw error;
     }
   },

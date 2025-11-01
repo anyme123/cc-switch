@@ -1560,23 +1560,24 @@ pub async fn import_mcp_from_droid(state: State<'_, AppState>) -> Result<usize, 
 #[tauri::command]
 pub async fn check_mcp_sync_conflict(
     state: State<'_, AppState>,
-    app: Option<String>,
+    target_app: Option<String>,
     id: String,
 ) -> Result<bool, String> {
     let cfg = state
         .config
         .lock()
         .map_err(|e| format!("获取锁失败: {}", e))?;
-    let app_ty = crate::app_config::AppType::from(app.as_deref().unwrap_or("claude"));
-    let exists = crate::mcp::check_mcp_exists_in_other_app(&cfg, &app_ty, &id);
+    let target_app_ty = crate::app_config::AppType::from(target_app.as_deref().unwrap_or("claude"));
+    let exists = crate::mcp::check_mcp_exists_in_target_app(&cfg, &target_app_ty, &id);
     Ok(exists)
 }
 
-/// 将 MCP 服务器同步到另一个应用
+/// 将 MCP 服务器同步到目标应用（三向同步：Claude ↔ Codex ↔ Droid）
 #[tauri::command]
 pub async fn sync_mcp_to_other_app(
     state: State<'_, AppState>,
-    app: Option<String>,
+    source_app: Option<String>,
+    target_app: Option<String>,
     id: String,
     overwrite: bool,
 ) -> Result<bool, String> {
@@ -1584,8 +1585,9 @@ pub async fn sync_mcp_to_other_app(
         .config
         .lock()
         .map_err(|e| format!("获取锁失败: {}", e))?;
-    let app_ty = crate::app_config::AppType::from(app.as_deref().unwrap_or("claude"));
-    let synced = crate::mcp::copy_mcp_to_other_app(&mut cfg, &app_ty, &id, overwrite)?;
+    let source_app_ty = crate::app_config::AppType::from(source_app.as_deref().unwrap_or("claude"));
+    let target_app_ty = crate::app_config::AppType::from(target_app.as_deref().unwrap_or("codex"));
+    let synced = crate::mcp::copy_mcp_to_target_app(&mut cfg, &source_app_ty, &target_app_ty, &id, overwrite)?;
     drop(cfg);
     if synced {
         state.save()?;
