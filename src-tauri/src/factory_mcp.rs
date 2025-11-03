@@ -34,11 +34,21 @@ fn write_json_value(path: &Path, value: &Value) -> Result<(), String> {
 /// 读取 Factory MCP 配置文件内容
 pub fn read_mcp_json() -> Result<Option<String>, String> {
     let path = factory_mcp_config_path();
+    log::info!("尝试读取 Droid MCP 配置: {}", path.display());
+
     if !path.exists() {
+        log::warn!("Droid MCP 配置文件不存在: {}", path.display());
         return Ok(None);
     }
+
+    log::info!("找到 Droid MCP 配置文件,开始读取...");
     let content = fs::read_to_string(&path)
-        .map_err(|e| format!("读取 Factory MCP 配置失败: {}", e))?;
+        .map_err(|e| {
+            log::error!("读取 Droid MCP 配置失败: {} - {}", path.display(), e);
+            format!("读取 Factory MCP 配置失败: {}", e)
+        })?;
+
+    log::info!("成功读取 Droid MCP 配置,大小: {} 字节", content.len());
     Ok(Some(content))
 }
 

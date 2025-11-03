@@ -118,6 +118,13 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
   const [syncToOtherApp, setSyncToOtherApp] = useState(false);
   const [showSyncConfirm, setShowSyncConfirm] = useState(false);
   const [syncChecking, setSyncChecking] = useState(false);
+  // v3.5.2: 三向同步目标选择
+  const [syncTargetApp, setSyncTargetApp] = useState<string>(() => {
+    // 默认同步目标
+    if (appType === "claude") return "codex";
+    if (appType === "codex") return "claude";
+    return "claude"; // Droid 默认同步到 Claude
+  });
 
   // 判断是否使用 TOML 格式
   const useToml = appType === "codex";
@@ -287,11 +294,8 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
   // v3.5.1+: 执行同步到目标应用（三向同步：Claude ↔ Codex ↔ Droid）
   const performSync = async (id: string, overwrite: boolean) => {
     try {
-      // 确定目标应用
-      const targetApp =
-        appType === "claude" ? "codex" :
-        appType === "codex" ? "claude" :
-        "claude"; // Droid 默认同步到 Claude
+      // 使用用户选择的目标应用
+      const targetApp = syncTargetApp;
 
       const synced = await window.api.syncMcpToOtherApp(
         appType,
@@ -452,11 +456,8 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
       if (isEditing && syncToOtherApp) {
         try {
           setSyncChecking(true);
-          // 确定目标应用
-          const targetApp =
-            appType === "claude" ? "codex" :
-            appType === "codex" ? "claude" :
-            "claude"; // Droid 默认同步到 Claude
+          // 使用用户选择的目标应用
+          const targetApp = syncTargetApp;
 
           const hasConflict = await window.api.checkMcpSyncConflict(
             targetApp,
@@ -494,8 +495,10 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
   const getFormTitle = () => {
     if (appType === "claude") {
       return isEditing ? t("mcp.editClaudeServer") : t("mcp.addClaudeServer");
-    } else {
+    } else if (appType === "codex") {
       return isEditing ? t("mcp.editCodexServer") : t("mcp.addCodexServer");
+    } else {
+      return isEditing ? t("mcp.editDroidServer") : t("mcp.addDroidServer");
     }
   };
 
@@ -707,22 +710,38 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
 
         {/* Footer */}
         <div className="flex-shrink-0 flex items-center justify-between gap-3 p-6 border-t border-gray-200 dark:border-gray-800 bg-gray-100 dark:bg-gray-800">
-          {/* 左侧：同步复选框（仅编辑模式） */}
+          {/* 左侧：同步复选框和目标选择（仅编辑模式） */}
           {isEditing && (
-            <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={syncToOtherApp}
-                onChange={(e) => setSyncToOtherApp(e.target.checked)}
-                disabled={saving || syncChecking}
-                className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-emerald-500 focus:ring-2 focus:ring-emerald-500 dark:focus:ring-emerald-400 disabled:opacity-50"
-              />
-              <span>
-                {t("mcp.sync.syncToOtherApp", {
-                  targetApp: appType === "claude" ? "Codex" : "Claude Code",
-                })}
-              </span>
-            </label>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={syncToOtherApp}
+                  onChange={(e) => setSyncToOtherApp(e.target.checked)}
+                  disabled={saving || syncChecking}
+                  className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-emerald-500 focus:ring-2 focus:ring-emerald-500 dark:focus:ring-emerald-400 disabled:opacity-50"
+                />
+                <span>{t("mcp.sync.syncTo")}</span>
+              </label>
+              {syncToOtherApp && (
+                <select
+                  value={syncTargetApp}
+                  onChange={(e) => setSyncTargetApp(e.target.value)}
+                  disabled={saving || syncChecking}
+                  className="px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-emerald-500 dark:focus:ring-emerald-400 disabled:opacity-50"
+                >
+                  {appType !== "claude" && (
+                    <option value="claude">Claude Code</option>
+                  )}
+                  {appType !== "codex" && (
+                    <option value="codex">Codex</option>
+                  )}
+                  {appType !== "droid" && (
+                    <option value="droid">Droid</option>
+                  )}
+                </select>
+              )}
+            </div>
           )}
           {!isEditing && <div />} {/* 占位符，保持右侧按钮对齐 */}
 
@@ -771,7 +790,10 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
             </h3>
             <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
               {t("mcp.sync.conflictMessage", {
-                targetApp: appType === "claude" ? "Codex" : "Claude Code",
+                targetApp:
+                  syncTargetApp === "claude" ? "Claude Code" :
+                  syncTargetApp === "codex" ? "Codex" :
+                  "Droid",
                 id: formId,
               })}
             </p>

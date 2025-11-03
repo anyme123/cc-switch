@@ -40,6 +40,7 @@ struct StandardUsage {
 }
 
 /// 获取 Droid 配置目录路径
+/// Factory AI 使用 ~/.factory 作为配置目录
 pub fn get_droid_config_dir() -> PathBuf {
     if let Some(custom) = crate::settings::get_droid_override_dir() {
         return custom;
@@ -47,7 +48,7 @@ pub fn get_droid_config_dir() -> PathBuf {
 
     dirs::home_dir()
         .expect("无法获取用户主目录")
-        .join(".droid")
+        .join(".factory")
 }
 
 /// 获取 Droid API Key 配置文件路径（预留功能）

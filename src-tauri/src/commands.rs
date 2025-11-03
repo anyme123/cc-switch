@@ -1422,7 +1422,7 @@ pub async fn delete_mcp_server_in_config(
     let existed = crate::mcp::delete_in_config_for(&mut cfg, &app_ty, &id)?;
     drop(cfg);
     state.save()?;
-    // 若删除的是 Claude/Codex 客户端的条目，则同步一次，确保启用项从对应 live 配置中移除
+    // 若删除的是 Claude/Codex/Droid 客户端的条目，则同步一次，确保启用项从对应 live 配置中移除
     let cfg2 = state
         .config
         .lock()
@@ -1430,9 +1430,7 @@ pub async fn delete_mcp_server_in_config(
     match app_ty {
         crate::app_config::AppType::Claude => crate::mcp::sync_enabled_to_claude(&cfg2)?,
         crate::app_config::AppType::Codex => crate::mcp::sync_enabled_to_codex(&cfg2)?,
-        crate::app_config::AppType::Droid => {
-            // Droid 暂不支持 MCP 同步
-        }
+        crate::app_config::AppType::Droid => crate::mcp::sync_enabled_to_droid(&cfg2)?,
     }
     Ok(existed)
 }

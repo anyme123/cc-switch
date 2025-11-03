@@ -174,7 +174,11 @@ const McpPanel: React.FC<McpPanelProps> = ({ onClose, onNotify, appType }) => {
   );
 
   const panelTitle =
-    appType === "claude" ? t("mcp.claudeTitle") : t("mcp.codexTitle");
+    appType === "claude"
+      ? t("mcp.claudeTitle")
+      : appType === "codex"
+        ? t("mcp.codexTitle")
+        : t("mcp.droidTitle");
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
