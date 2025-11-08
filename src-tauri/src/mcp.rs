@@ -3,6 +3,65 @@ use std::collections::HashMap;
 
 use crate::app_config::{AppType, McpConfig, MultiAppConfig};
 
+/// 规范化 Windows 下的 npx 命令：自动添加 cmd /c 包裹
+/// 修改传入的 spec，如果是 Windows 且 command 是 npx 但没有 cmd /c 包裹，则自动修复
+fn normalize_windows_npx_command(spec: &mut Value) -> bool {
+    // 仅在 Windows 平台处理
+    #[cfg(not(target_os = "windows"))]
+    {
+        return false;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let Some(spec_obj) = spec.as_object_mut() else {
+            return false;
+        };
+
+        // 仅处理 stdio 类型（默认也是 stdio）
+        let typ = spec_obj
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("stdio");
+        if typ != "stdio" {
+            return false;
+        }
+
+        let Some(cmd) = spec_obj.get("command").and_then(|v| v.as_str()).map(|s| s.to_string()) else {
+            return false;
+        };
+
+        let cmd_trimmed = cmd.trim();
+
+        // 如果命令是 npx 开头，但不是 cmd /c 包裹的，则需要修复
+        if cmd_trimmed.starts_with("npx ") || cmd_trimmed == "npx" {
+            // 检查是否已经包裹
+            if !cmd_trimmed.starts_with("cmd /c") && !cmd_trimmed.starts_with("cmd.exe /c") {
+                // 先读取原来的 args（如果有）
+                let old_args = spec_obj.get("args").and_then(|v| v.as_array()).cloned();
+
+                // 需要修复：添加 cmd /c 包裹
+                spec_obj.insert("command".into(), json!("cmd"));
+
+                // 将原 command 和 args 合并为新的 args
+                let mut new_args = vec![json!("/c"), json!(cmd_trimmed)];
+
+                // 如果原来有 args，追加到后面
+                if let Some(old_args_vec) = old_args {
+                    new_args.extend(old_args_vec);
+                }
+
+                spec_obj.insert("args".into(), json!(new_args));
+
+                log::info!("已自动修复 Windows npx 命令: {} -> cmd /c {}", cmd_trimmed, cmd_trimmed);
+                return true;
+            }
+        }
+
+        false
+    }
+}
+
 /// 基础校验：允许 stdio/http；或省略 type（视为 stdio）。对应必填字段存在
 fn validate_server_spec(spec: &Value) -> Result<(), String> {
     if !spec.is_object() {
@@ -335,8 +394,10 @@ pub fn import_from_claude(config: &mut MultiAppConfig) -> Result<usize, String> 
     };
 
     for (id, spec) in map.iter() {
-        // 校验目标 spec
-        validate_server_spec(spec)?;
+        // 规范化 Windows npx 命令并校验目标 spec
+        let mut spec_normalized = spec.clone();
+        normalize_windows_npx_command(&mut spec_normalized);
+        validate_server_spec(&spec_normalized)?;
 
         let entry = config
             .mcp_for_mut(&AppType::Claude)
@@ -348,7 +409,7 @@ pub fn import_from_claude(config: &mut MultiAppConfig) -> Result<usize, String> 
                 let mut obj = serde_json::Map::new();
                 obj.insert(String::from("id"), json!(id));
                 obj.insert(String::from("name"), json!(id));
-                obj.insert(String::from("server"), spec.clone());
+                obj.insert(String::from("server"), spec_normalized.clone());
                 obj.insert(String::from("enabled"), json!(true));
                 vac.insert(Value::Object(obj));
                 changed += 1;
@@ -360,7 +421,7 @@ pub fn import_from_claude(config: &mut MultiAppConfig) -> Result<usize, String> 
                     let mut obj = serde_json::Map::new();
                     obj.insert(String::from("id"), json!(id));
                     obj.insert(String::from("name"), json!(id));
-                    obj.insert(String::from("server"), spec.clone());
+                    obj.insert(String::from("server"), spec_normalized.clone());
                     obj.insert(String::from("enabled"), json!(true));
                     occ.insert(Value::Object(obj));
                     changed += 1;
@@ -371,8 +432,8 @@ pub fn import_from_claude(config: &mut MultiAppConfig) -> Result<usize, String> 
 
                 // 总是更新 server 字段，同步系统配置的最新参数
                 let prev_server = existing.get("server");
-                if prev_server.is_none() || prev_server != Some(spec) {
-                    existing.insert(String::from("server"), spec.clone());
+                if prev_server.is_none() || prev_server != Some(&spec_normalized) {
+                    existing.insert(String::from("server"), spec_normalized.clone());
                     modified = true;
                     log::debug!("更新 MCP '{}' 的 server 配置", id);
                 }
@@ -482,9 +543,10 @@ pub fn import_from_codex(config: &mut MultiAppConfig) -> Result<usize, String> {
                 _ => {}
             }
 
-            let spec_v = serde_json::Value::Object(spec);
+            let mut spec_v = serde_json::Value::Object(spec);
 
-            // 校验
+            // 规范化 Windows npx 命令并校验
+            normalize_windows_npx_command(&mut spec_v);
             if let Err(e) = validate_server_spec(&spec_v) {
                 log::warn!("跳过无效 Codex MCP 项 '{}': {}", id, e);
                 continue;
@@ -866,8 +928,10 @@ pub fn import_from_droid(config: &mut MultiAppConfig) -> Result<usize, String> {
     };
 
     for (id, spec) in map.iter() {
-        // 校验目标 spec
-        validate_server_spec(spec)?;
+        // 规范化 Windows npx 命令并校验目标 spec
+        let mut spec_normalized = spec.clone();
+        normalize_windows_npx_command(&mut spec_normalized);
+        validate_server_spec(&spec_normalized)?;
 
         let entry = config
             .mcp_for_mut(&AppType::Droid)
@@ -879,7 +943,7 @@ pub fn import_from_droid(config: &mut MultiAppConfig) -> Result<usize, String> {
                 let mut obj = serde_json::Map::new();
                 obj.insert(String::from("id"), json!(id));
                 obj.insert(String::from("name"), json!(id));
-                obj.insert(String::from("server"), spec.clone());
+                obj.insert(String::from("server"), spec_normalized.clone());
                 obj.insert(String::from("enabled"), json!(true));
                 vac.insert(Value::Object(obj));
                 changed += 1;
@@ -891,7 +955,7 @@ pub fn import_from_droid(config: &mut MultiAppConfig) -> Result<usize, String> {
                     let mut obj = serde_json::Map::new();
                     obj.insert(String::from("id"), json!(id));
                     obj.insert(String::from("name"), json!(id));
-                    obj.insert(String::from("server"), spec.clone());
+                    obj.insert(String::from("server"), spec_normalized.clone());
                     obj.insert(String::from("enabled"), json!(true));
                     occ.insert(Value::Object(obj));
                     changed += 1;
@@ -902,8 +966,8 @@ pub fn import_from_droid(config: &mut MultiAppConfig) -> Result<usize, String> {
 
                 // 总是更新 server 字段，同步系统配置的最新参数
                 let prev_server = existing.get("server");
-                if prev_server.is_none() || prev_server != Some(spec) {
-                    existing.insert(String::from("server"), spec.clone());
+                if prev_server.is_none() || prev_server != Some(&spec_normalized) {
+                    existing.insert(String::from("server"), spec_normalized.clone());
                     modified = true;
                     log::debug!("更新 MCP '{}' 的 server 配置", id);
                 }
