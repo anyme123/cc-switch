@@ -61,13 +61,44 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'CC Switch ${{ github.ref_name }}'
           releaseBody: |
-            ## 🎉 CC Switch ${{ github.ref_name }}
+            ## CC Switch ${{ github.ref_name }}
+
+            ### 主要更新
+
+            **MCP 配置管理优化**
+            - 系统配置优先策略：用户手动修改的 MCP 配置不会被项目覆盖
+            - 双向同步：系统配置和项目配置相互合并，互不干扰
+            - 实时同步：UI 显示的是系统真实配置，每次读取前自动导入最新数据
+            - 参数同步：从系统导入时会同步更新所有参数到项目配置
+            - 智能区分：区分项目管理和用户手动添加的服务器
+
+            **Windows 支持改进**
+            - 自动修复 npx 命令：Windows 下的 npx 命令自动添加 cmd /c 包裹
+            - 免安装版本：提供 Windows 便携版（zip 格式）
 
             ### 下载说明
-            请从下方的 Assets 中下载对应平台的安装包
-
-            ### 更新内容
-            请查看提交记录了解详细更新内容。
+            - **Windows 用户**：下载 `.msi` 安装包或 `.zip` 免安装版本
+            - **macOS 用户**：下载对应架构的 `.app.tar.gz`（Intel 或 Apple Silicon）
+            - **Linux 用户**：下载 `.AppImage` 或 `.deb` 包
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+      # Windows 平台：额外创建免安装版本（zip）
+      - name: Create Windows Portable Version
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $exePath = Get-ChildItem -Path "src-tauri/target/release" -Filter "CC Switch.exe" -Recurse | Select-Object -First 1
+          if ($exePath) {
+            $zipName = "CC-Switch-${{ github.ref_name }}-Windows-Portable.zip"
+            Compress-Archive -Path $exePath.FullName -DestinationPath $zipName
+            echo "PORTABLE_ZIP=$zipName" >> $env:GITHUB_ENV
+          }
+
+      - name: Upload Windows Portable to Release
+        if: matrix.platform == 'windows-latest' && env.PORTABLE_ZIP
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ env.PORTABLE_ZIP }}
+          tag_name: ${{ github.ref_name }}
