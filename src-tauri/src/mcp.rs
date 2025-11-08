@@ -256,6 +256,11 @@ fn collect_enabled_servers(cfg: &McpConfig) -> HashMap<String, Value> {
     out
 }
 
+/// 收集项目管理的所有 MCP 服务器 ID（不管启用状态）
+fn collect_managed_server_ids(cfg: &McpConfig) -> std::collections::HashSet<String> {
+    cfg.servers.keys().cloned().collect()
+}
+
 pub fn get_servers_snapshot_for(
     config: &mut MultiAppConfig,
     app: &AppType,
@@ -378,7 +383,8 @@ pub fn set_enabled_and_sync_for(
 /// 将 config.json 中 enabled==true 的项投影写入 ~/.claude.json
 pub fn sync_enabled_to_claude(config: &MultiAppConfig) -> Result<(), String> {
     let enabled = collect_enabled_servers(&config.mcp.claude);
-    crate::claude_mcp::set_mcp_servers_map(&enabled)
+    let managed_ids = collect_managed_server_ids(&config.mcp.claude);
+    crate::claude_mcp::set_mcp_servers_map(&enabled, &managed_ids)
 }
 
 /// 从 ~/.claude.json 导入 mcpServers 到 config.json（设为 enabled=true）。
@@ -639,14 +645,15 @@ pub fn import_from_codex(config: &mut MultiAppConfig) -> Result<usize, String> {
 /// 将 config.json 中 Codex 的 enabled==true 项以 TOML 形式合并到 ~/.codex/config.toml 的 [mcp.servers]
 /// 策略：
 /// - 读取现有 config.toml；若语法无效则报错，不尝试覆盖
-/// - 保留系统中已存在但不在项目管理列表中的服务器（用户手动添加的）
-/// - 更新/添加项目中 enabled=true 的服务器
+/// - 对于项目管理的服务器：总是同步（enabled=true 则写入/更新，enabled=false 则删除）
+/// - 对于用户手动添加的服务器：保留在系统中不删除
 /// - 保留 `mcp` 其它键
 pub fn sync_enabled_to_codex(config: &MultiAppConfig) -> Result<(), String> {
     use toml::{value::Value as TomlValue, Table as TomlTable};
 
-    // 1) 收集启用项（Codex 维度）
+    // 1) 收集启用项和项目管理的所有 ID（Codex 维度）
     let enabled = collect_enabled_servers(&config.mcp.codex);
+    let managed_ids = collect_managed_server_ids(&config.mcp.codex);
 
     // 2) 读取现有 config.toml 并解析为 Table（允许空文件）
     let base_text = crate::codex_config::read_and_validate_codex_config_text()?;
@@ -675,16 +682,18 @@ pub fn sync_enabled_to_codex(config: &MultiAppConfig) -> Result<(), String> {
             .unwrap_or_default()
     };
 
-    // 从现有配置开始，保留所有已存在的服务器
-    let mut servers_tbl = existing_servers;
+    let mut servers_tbl = TomlTable::new();
 
-    // 仅添加系统中不存在的服务器（避免覆盖用户手动修改的参数）
-    for (id, spec) in enabled.iter() {
-        // 如果系统中已经存在这个服务器，保留系统中的配置
-        if servers_tbl.contains_key(id) {
-            log::debug!("保留系统中已存在的 MCP 服务器配置: {}", id);
-            continue;
+    // 1. 保留系统中用户手动添加的服务器（不在项目管理列表中的）
+    for (id, spec) in existing_servers.iter() {
+        if !managed_ids.contains(id) {
+            servers_tbl.insert(id.clone(), spec.clone());
+            log::debug!("保留用户手动添加的 MCP 服务器: {}", id);
         }
+    }
+
+    // 2. 写入/更新项目中启用的服务器（禁用的会被自动删除）
+    for (id, spec) in enabled.iter() {
 
         let mut s = TomlTable::new();
 
@@ -912,7 +921,8 @@ pub fn is_mcp_enabled(config: &MultiAppConfig, app: &AppType, id: &str) -> bool 
 /// 将 config.json 中 enabled==true 的项投影写入 ~/.factory/mcp.json
 pub fn sync_enabled_to_droid(config: &MultiAppConfig) -> Result<(), String> {
     let enabled = collect_enabled_servers(&config.mcp.droid);
-    crate::factory_mcp::set_mcp_servers_map(&enabled)
+    let managed_ids = collect_managed_server_ids(&config.mcp.droid);
+    crate::factory_mcp::set_mcp_servers_map(&enabled, &managed_ids)
 }
 
 /// 从 ~/.factory/mcp.json 导入 mcpServers 到 config.json（设为 enabled=true）。
