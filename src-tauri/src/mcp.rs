@@ -323,7 +323,7 @@ pub fn sync_enabled_to_claude(config: &MultiAppConfig) -> Result<(), String> {
 }
 
 /// 从 ~/.claude.json 导入 mcpServers 到 config.json（设为 enabled=true）。
-/// 已存在的项仅强制 enabled=true，不覆盖其他字段。
+/// 已存在的项会更新 server 字段（同步系统配置的最新参数）和 enabled=true。
 pub fn import_from_claude(config: &mut MultiAppConfig) -> Result<usize, String> {
     let text_opt = crate::claude_mcp::read_mcp_json()?;
     let Some(text) = text_opt else { return Ok(0) };
@@ -368,6 +368,15 @@ pub fn import_from_claude(config: &mut MultiAppConfig) -> Result<usize, String> 
                 };
 
                 let mut modified = false;
+
+                // 总是更新 server 字段，同步系统配置的最新参数
+                let prev_server = existing.get("server");
+                if prev_server.is_none() || prev_server != Some(spec) {
+                    existing.insert(String::from("server"), spec.clone());
+                    modified = true;
+                    log::debug!("更新 MCP '{}' 的 server 配置", id);
+                }
+
                 let prev_enabled = existing
                     .get("enabled")
                     .and_then(|b| b.as_bool())
@@ -376,11 +385,7 @@ pub fn import_from_claude(config: &mut MultiAppConfig) -> Result<usize, String> 
                     existing.insert(String::from("enabled"), json!(true));
                     modified = true;
                 }
-                if existing.get("server").is_none() {
-                    log::warn!("MCP 条目 '{}' 缺少 server 字段，覆盖为导入数据", id);
-                    existing.insert(String::from("server"), spec.clone());
-                    modified = true;
-                }
+
                 if existing.get("id").is_none() {
                     log::warn!("MCP 条目 '{}' 缺少 id 字段，自动填充", id);
                     existing.insert(String::from("id"), json!(id));
@@ -397,7 +402,7 @@ pub fn import_from_claude(config: &mut MultiAppConfig) -> Result<usize, String> 
 
 /// 从 ~/.codex/config.toml 导入 MCP 到 config.json（Codex 作用域），并将导入项设为 enabled=true。
 /// 支持两种 schema：[mcp.servers.<id>] 与 [mcp_servers.<id>]。
-/// 已存在的项仅强制 enabled=true，不覆盖其他字段。
+/// 已存在的项会更新 server 字段（同步系统配置的最新参数）和 enabled=true。
 pub fn import_from_codex(config: &mut MultiAppConfig) -> Result<usize, String> {
     let text = crate::codex_config::read_and_validate_codex_config_text()?;
     if text.trim().is_empty() {
@@ -485,7 +490,7 @@ pub fn import_from_codex(config: &mut MultiAppConfig) -> Result<usize, String> {
                 continue;
             }
 
-            // 合并：仅强制 enabled=true
+            // 合并：强制 enabled=true，并更新 server 字段
             use std::collections::hash_map::Entry;
             let entry = config
                 .mcp_for_mut(&AppType::Codex)
@@ -516,6 +521,15 @@ pub fn import_from_codex(config: &mut MultiAppConfig) -> Result<usize, String> {
                     };
 
                     let mut modified = false;
+
+                    // 总是更新 server 字段，同步系统配置的最新参数
+                    let prev_server = existing.get("server");
+                    if prev_server.is_none() || prev_server != Some(&spec_v) {
+                        existing.insert(String::from("server"), spec_v.clone());
+                        modified = true;
+                        log::debug!("更新 MCP '{}' 的 server 配置", id);
+                    }
+
                     let prev = existing
                         .get("enabled")
                         .and_then(|b| b.as_bool())
@@ -524,11 +538,7 @@ pub fn import_from_codex(config: &mut MultiAppConfig) -> Result<usize, String> {
                         existing.insert(String::from("enabled"), json!(true));
                         modified = true;
                     }
-                    if existing.get("server").is_none() {
-                        log::warn!("MCP 条目 '{}' 缺少 server 字段，覆盖为导入数据", id);
-                        existing.insert(String::from("server"), spec_v.clone());
-                        modified = true;
-                    }
+
                     if existing.get("id").is_none() {
                         log::warn!("MCP 条目 '{}' 缺少 id 字段，自动填充", id);
                         existing.insert(String::from("id"), json!(id));
@@ -564,11 +574,12 @@ pub fn import_from_codex(config: &mut MultiAppConfig) -> Result<usize, String> {
     Ok(changed_total)
 }
 
-/// 将 config.json 中 Codex 的 enabled==true 项以 TOML 形式写入 ~/.codex/config.toml 的 [mcp.servers]
+/// 将 config.json 中 Codex 的 enabled==true 项以 TOML 形式合并到 ~/.codex/config.toml 的 [mcp.servers]
 /// 策略：
 /// - 读取现有 config.toml；若语法无效则报错，不尝试覆盖
-/// - 仅更新 `mcp.servers` 或 `mcp_servers` 子表，保留 `mcp` 其它键
-/// - 仅写入启用项；无启用项时清理对应子表
+/// - 保留系统中已存在但不在项目管理列表中的服务器（用户手动添加的）
+/// - 更新/添加项目中 enabled=true 的服务器
+/// - 保留 `mcp` 其它键
 pub fn sync_enabled_to_codex(config: &MultiAppConfig) -> Result<(), String> {
     use toml::{value::Value as TomlValue, Table as TomlTable};
 
@@ -586,9 +597,112 @@ pub fn sync_enabled_to_codex(config: &MultiAppConfig) -> Result<(), String> {
 
     // 3) 写入 servers 表（支持 mcp.servers 与 mcp_servers；优先沿用已有风格，默认 mcp_servers）
     let prefer_mcp_servers = root.get("mcp_servers").is_some() || root.get("mcp").is_none();
-    if enabled.is_empty() {
-        // 无启用项：移除两种节点
-        // 清除 mcp.servers，但保留其他 mcp 字段
+
+    // 读取现有的 servers 配置
+    let existing_servers = if prefer_mcp_servers {
+        root.get("mcp_servers")
+            .and_then(|v| v.as_table())
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        root.get("mcp")
+            .and_then(|v| v.as_table())
+            .and_then(|t| t.get("servers"))
+            .and_then(|v| v.as_table())
+            .cloned()
+            .unwrap_or_default()
+    };
+
+    // 从现有配置开始，保留所有已存在的服务器
+    let mut servers_tbl = existing_servers;
+
+    // 仅添加系统中不存在的服务器（避免覆盖用户手动修改的参数）
+    for (id, spec) in enabled.iter() {
+        // 如果系统中已经存在这个服务器，保留系统中的配置
+        if servers_tbl.contains_key(id) {
+            log::debug!("保留系统中已存在的 MCP 服务器配置: {}", id);
+            continue;
+        }
+
+        let mut s = TomlTable::new();
+
+        // 类型（缺省视为 stdio）
+        let typ = spec.get("type").and_then(|v| v.as_str()).unwrap_or("stdio");
+        s.insert("type".into(), TomlValue::String(typ.to_string()));
+
+        match typ {
+            "stdio" => {
+                let cmd = spec
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                s.insert("command".into(), TomlValue::String(cmd));
+
+                if let Some(args) = spec.get("args").and_then(|v| v.as_array()) {
+                    let arr = args
+                        .iter()
+                        .filter_map(|x| x.as_str())
+                        .map(|x| TomlValue::String(x.to_string()))
+                        .collect::<Vec<_>>();
+                    if !arr.is_empty() {
+                        s.insert("args".into(), TomlValue::Array(arr));
+                    }
+                }
+
+                if let Some(cwd) = spec.get("cwd").and_then(|v| v.as_str()) {
+                    if !cwd.trim().is_empty() {
+                        s.insert("cwd".into(), TomlValue::String(cwd.to_string()));
+                    }
+                }
+
+                if let Some(env) = spec.get("env").and_then(|v| v.as_object()) {
+                    let mut env_tbl = TomlTable::new();
+                    for (k, v) in env.iter() {
+                        if let Some(sv) = v.as_str() {
+                            env_tbl.insert(k.clone(), TomlValue::String(sv.to_string()));
+                        }
+                    }
+                    if !env_tbl.is_empty() {
+                        s.insert("env".into(), TomlValue::Table(env_tbl));
+                    }
+                }
+            }
+            "http" => {
+                let url = spec
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                s.insert("url".into(), TomlValue::String(url));
+
+                if let Some(headers) = spec.get("headers").and_then(|v| v.as_object()) {
+                    let mut h_tbl = TomlTable::new();
+                    for (k, v) in headers.iter() {
+                        if let Some(sv) = v.as_str() {
+                            h_tbl.insert(k.clone(), TomlValue::String(sv.to_string()));
+                        }
+                    }
+                    if !h_tbl.is_empty() {
+                        s.insert("headers".into(), TomlValue::Table(h_tbl));
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // 仅当系统中不存在时才插入
+        servers_tbl.insert(id.clone(), TomlValue::Table(s));
+        log::info!("添加新的 MCP 服务器到系统配置: {}", id);
+    }
+
+    // 4) 写入合并后的 servers 表
+    let servers_value = TomlValue::Table(servers_tbl.clone());
+
+    if prefer_mcp_servers {
+        root.insert("mcp_servers".into(), servers_value);
+
+        // 若存在 mcp，则仅移除 servers 字段，保留其他键
         let mut should_drop_mcp = false;
         if let Some(mcp_val) = root.get_mut("mcp") {
             match mcp_val {
@@ -602,131 +716,34 @@ pub fn sync_enabled_to_codex(config: &MultiAppConfig) -> Result<(), String> {
         if should_drop_mcp {
             root.remove("mcp");
         }
-
-        // 清除顶层 mcp_servers
-        root.remove("mcp_servers");
     } else {
-        let mut servers_tbl = TomlTable::new();
+        let mut inserted = false;
 
-        for (id, spec) in enabled.iter() {
-            let mut s = TomlTable::new();
-
-            // 类型（缺省视为 stdio）
-            let typ = spec.get("type").and_then(|v| v.as_str()).unwrap_or("stdio");
-            s.insert("type".into(), TomlValue::String(typ.to_string()));
-
-            match typ {
-                "stdio" => {
-                    let cmd = spec
-                        .get("command")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    s.insert("command".into(), TomlValue::String(cmd));
-
-                    if let Some(args) = spec.get("args").and_then(|v| v.as_array()) {
-                        let arr = args
-                            .iter()
-                            .filter_map(|x| x.as_str())
-                            .map(|x| TomlValue::String(x.to_string()))
-                            .collect::<Vec<_>>();
-                        if !arr.is_empty() {
-                            s.insert("args".into(), TomlValue::Array(arr));
-                        }
-                    }
-
-                    if let Some(cwd) = spec.get("cwd").and_then(|v| v.as_str()) {
-                        if !cwd.trim().is_empty() {
-                            s.insert("cwd".into(), TomlValue::String(cwd.to_string()));
-                        }
-                    }
-
-                    if let Some(env) = spec.get("env").and_then(|v| v.as_object()) {
-                        let mut env_tbl = TomlTable::new();
-                        for (k, v) in env.iter() {
-                            if let Some(sv) = v.as_str() {
-                                env_tbl.insert(k.clone(), TomlValue::String(sv.to_string()));
-                            }
-                        }
-                        if !env_tbl.is_empty() {
-                            s.insert("env".into(), TomlValue::Table(env_tbl));
-                        }
-                    }
+        if let Some(mcp_val) = root.get_mut("mcp") {
+            match mcp_val {
+                TomlValue::Table(tbl) => {
+                    tbl.insert("servers".into(), TomlValue::Table(servers_tbl.clone()));
+                    inserted = true;
                 }
-                "http" => {
-                    let url = spec
-                        .get("url")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    s.insert("url".into(), TomlValue::String(url));
-
-                    if let Some(headers) = spec.get("headers").and_then(|v| v.as_object()) {
-                        let mut h_tbl = TomlTable::new();
-                        for (k, v) in headers.iter() {
-                            if let Some(sv) = v.as_str() {
-                                h_tbl.insert(k.clone(), TomlValue::String(sv.to_string()));
-                            }
-                        }
-                        if !h_tbl.is_empty() {
-                            s.insert("headers".into(), TomlValue::Table(h_tbl));
-                        }
-                    }
+                _ => {
+                    let mut mcp_tbl = TomlTable::new();
+                    mcp_tbl.insert("servers".into(), TomlValue::Table(servers_tbl.clone()));
+                    *mcp_val = TomlValue::Table(mcp_tbl);
+                    inserted = true;
                 }
-                _ => {}
             }
-
-            servers_tbl.insert(id.clone(), TomlValue::Table(s));
         }
 
-        let servers_value = TomlValue::Table(servers_tbl.clone());
-
-        if prefer_mcp_servers {
-            root.insert("mcp_servers".into(), servers_value);
-
-            // 若存在 mcp，则仅移除 servers 字段，保留其他键
-            let mut should_drop_mcp = false;
-            if let Some(mcp_val) = root.get_mut("mcp") {
-                match mcp_val {
-                    TomlValue::Table(tbl) => {
-                        tbl.remove("servers");
-                        should_drop_mcp = tbl.is_empty();
-                    }
-                    _ => should_drop_mcp = true,
-                }
-            }
-            if should_drop_mcp {
-                root.remove("mcp");
-            }
-        } else {
-            let mut inserted = false;
-
-            if let Some(mcp_val) = root.get_mut("mcp") {
-                match mcp_val {
-                    TomlValue::Table(tbl) => {
-                        tbl.insert("servers".into(), TomlValue::Table(servers_tbl.clone()));
-                        inserted = true;
-                    }
-                    _ => {
-                        let mut mcp_tbl = TomlTable::new();
-                        mcp_tbl.insert("servers".into(), TomlValue::Table(servers_tbl.clone()));
-                        *mcp_val = TomlValue::Table(mcp_tbl);
-                        inserted = true;
-                    }
-                }
-            }
-
-            if !inserted {
-                let mut mcp_tbl = TomlTable::new();
-                mcp_tbl.insert("servers".into(), TomlValue::Table(servers_tbl));
-                root.insert("mcp".into(), TomlValue::Table(mcp_tbl));
-            }
-
-            root.remove("mcp_servers");
+        if !inserted {
+            let mut mcp_tbl = TomlTable::new();
+            mcp_tbl.insert("servers".into(), TomlValue::Table(servers_tbl));
+            root.insert("mcp".into(), TomlValue::Table(mcp_tbl));
         }
+
+        root.remove("mcp_servers");
     }
 
-    // 4) 序列化并写回 config.toml（仅改 TOML，不触碰 auth.json）
+    // 5) 序列化并写回 config.toml（仅改 TOML，不触碰 auth.json）
     let new_text = toml::to_string(&TomlValue::Table(root))
         .map_err(|e| format!("序列化 config.toml 失败: {}", e))?;
     let path = crate::codex_config::get_codex_config_path();
@@ -837,7 +854,7 @@ pub fn sync_enabled_to_droid(config: &MultiAppConfig) -> Result<(), String> {
 }
 
 /// 从 ~/.factory/mcp.json 导入 mcpServers 到 config.json（设为 enabled=true）。
-/// 已存在的项仅强制 enabled=true，不覆盖其他字段。
+/// 已存在的项会更新 server 字段（同步系统配置的最新参数）和 enabled=true。
 pub fn import_from_droid(config: &mut MultiAppConfig) -> Result<usize, String> {
     let text_opt = crate::factory_mcp::read_mcp_json()?;
     let Some(text) = text_opt else { return Ok(0) };
@@ -882,6 +899,15 @@ pub fn import_from_droid(config: &mut MultiAppConfig) -> Result<usize, String> {
                 };
 
                 let mut modified = false;
+
+                // 总是更新 server 字段，同步系统配置的最新参数
+                let prev_server = existing.get("server");
+                if prev_server.is_none() || prev_server != Some(spec) {
+                    existing.insert(String::from("server"), spec.clone());
+                    modified = true;
+                    log::debug!("更新 MCP '{}' 的 server 配置", id);
+                }
+
                 let prev_enabled = existing
                     .get("enabled")
                     .and_then(|b| b.as_bool())
@@ -890,11 +916,7 @@ pub fn import_from_droid(config: &mut MultiAppConfig) -> Result<usize, String> {
                     existing.insert(String::from("enabled"), json!(true));
                     modified = true;
                 }
-                if existing.get("server").is_none() {
-                    log::warn!("MCP 条目 '{}' 缺少 server 字段，覆盖为导入数据", id);
-                    existing.insert(String::from("server"), spec.clone());
-                    modified = true;
-                }
+
                 if existing.get("id").is_none() {
                     log::warn!("MCP 条目 '{}' 缺少 id 字段，自动填充", id);
                     existing.insert(String::from("id"), json!(id));

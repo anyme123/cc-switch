@@ -1341,7 +1341,7 @@ pub struct McpConfigResponse {
     pub servers: std::collections::HashMap<String, serde_json::Value>,
 }
 
-/// 获取 MCP 配置（来自 ~/.cc-switch/config.json）
+/// 获取 MCP 配置（先从系统导入最新配置，再返回）
 #[tauri::command]
 pub async fn get_mcp_config(
     state: State<'_, AppState>,
@@ -1355,8 +1355,17 @@ pub async fn get_mcp_config(
         .lock()
         .map_err(|e| format!("获取锁失败: {}", e))?;
     let app_ty = crate::app_config::AppType::from(app.as_deref().unwrap_or("claude"));
+
+    // 先从系统配置导入最新数据，确保读取到用户的手动修改
+    let imported = match app_ty {
+        AppType::Claude => crate::mcp::import_from_claude(&mut cfg)?,
+        AppType::Codex => crate::mcp::import_from_codex(&mut cfg)?,
+        AppType::Droid => crate::mcp::import_from_droid(&mut cfg)?,
+    };
+
+    // 获取合并后的配置快照
     let (servers, normalized) = crate::mcp::get_servers_snapshot_for(&mut cfg, &app_ty);
-    let need_save = normalized > 0;
+    let need_save = imported > 0 || normalized > 0;
     drop(cfg);
     if need_save {
         state.save()?;
@@ -1454,16 +1463,22 @@ pub async fn set_mcp_enabled(
     Ok(changed)
 }
 
-/// 手动同步：将启用的 MCP 投影到 ~/.claude.json（不更改 config.json）
+/// 手动同步：先从系统导入，再将启用的 MCP 投影到 ~/.claude.json
 #[tauri::command]
 pub async fn sync_enabled_mcp_to_claude(state: State<'_, AppState>) -> Result<bool, String> {
     let mut cfg = state
         .config
         .lock()
         .map_err(|e| format!("获取锁失败: {}", e))?;
+
+    // 先从 ~/.claude.json 导入最新配置，确保不丢失用户手动添加的服务器
+    let imported = crate::mcp::import_from_claude(&mut cfg)?;
     let normalized = crate::mcp::normalize_servers_for(&mut cfg, &AppType::Claude);
+
+    // 再将项目中启用的服务器同步回去
     crate::mcp::sync_enabled_to_claude(&cfg)?;
-    let need_save = normalized > 0;
+
+    let need_save = imported > 0 || normalized > 0;
     drop(cfg);
     if need_save {
         state.save()?;
@@ -1471,16 +1486,22 @@ pub async fn sync_enabled_mcp_to_claude(state: State<'_, AppState>) -> Result<bo
     Ok(true)
 }
 
-/// 手动同步：将启用的 MCP 投影到 ~/.codex/config.toml（不更改 config.json）
+/// 手动同步：先从系统导入，再将启用的 MCP 投影到 ~/.codex/config.toml
 #[tauri::command]
 pub async fn sync_enabled_mcp_to_codex(state: State<'_, AppState>) -> Result<bool, String> {
     let mut cfg = state
         .config
         .lock()
         .map_err(|e| format!("获取锁失败: {}", e))?;
+
+    // 先从 ~/.codex/config.toml 导入最新配置，确保不丢失用户手动添加的服务器
+    let imported = crate::mcp::import_from_codex(&mut cfg)?;
     let normalized = crate::mcp::normalize_servers_for(&mut cfg, &AppType::Codex);
+
+    // 再将项目中启用的服务器同步回去
     crate::mcp::sync_enabled_to_codex(&cfg)?;
-    let need_save = normalized > 0;
+
+    let need_save = imported > 0 || normalized > 0;
     drop(cfg);
     if need_save {
         state.save()?;
@@ -1518,16 +1539,22 @@ pub async fn import_mcp_from_codex(state: State<'_, AppState>) -> Result<usize, 
     Ok(changed)
 }
 
-/// 手动同步：将启用的 MCP 投影到 ~/.factory/mcp.json（不更改 config.json）
+/// 手动同步：先从系统导入，再将启用的 MCP 投影到 ~/.factory/mcp.json
 #[tauri::command]
 pub async fn sync_enabled_mcp_to_droid(state: State<'_, AppState>) -> Result<bool, String> {
     let mut cfg = state
         .config
         .lock()
         .map_err(|e| format!("获取锁失败: {}", e))?;
+
+    // 先从 ~/.factory/mcp.json 导入最新配置，确保不丢失用户手动添加的服务器
+    let imported = crate::mcp::import_from_droid(&mut cfg)?;
     let normalized = crate::mcp::normalize_servers_for(&mut cfg, &AppType::Droid);
+
+    // 再将项目中启用的服务器同步回去
     crate::mcp::sync_enabled_to_droid(&cfg)?;
-    let need_save = normalized > 0;
+
+    let need_save = imported > 0 || normalized > 0;
     drop(cfg);
     if need_save {
         state.save()?;

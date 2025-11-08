@@ -52,8 +52,11 @@ pub fn read_mcp_json() -> Result<Option<String>, String> {
     Ok(Some(content))
 }
 
-/// 将给定的启用 MCP 服务器映射写入到 ~/.factory/mcp.json 的 mcpServers 字段
-/// 仅覆盖 mcpServers，其他字段保持不变
+/// 将给定的启用 MCP 服务器映射合并到 ~/.factory/mcp.json 的 mcpServers 字段
+/// 策略：
+/// - 系统配置优先：保留系统中已存在的服务器配置（用户可能手动修改过参数）
+/// - 仅添加系统中不存在的项目服务器
+/// - 其他字段保持不变
 pub fn set_mcp_servers_map(
     servers: &std::collections::HashMap<String, Value>,
 ) -> Result<(), String> {
@@ -64,9 +67,24 @@ pub fn set_mcp_servers_map(
         serde_json::json!({})
     };
 
-    // 构建 mcpServers 对象：移除 UI 辅助字段（enabled/source），仅保留实际 MCP 规范
-    let mut out: Map<String, Value> = Map::new();
+    // 读取现有的 mcpServers（如果存在）
+    let existing_servers = root
+        .get("mcpServers")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+
+    // 从现有配置开始，保留所有已存在的服务器
+    let mut out: Map<String, Value> = existing_servers;
+
+    // 仅添加系统中不存在的服务器（避免覆盖用户手动修改的参数）
     for (id, spec) in servers.iter() {
+        // 如果系统中已经存在这个服务器，保留系统中的配置
+        if out.contains_key(id) {
+            log::debug!("保留系统中已存在的 MCP 服务器配置: {}", id);
+            continue;
+        }
+
         let mut obj = if let Some(map) = spec.as_object() {
             map.clone()
         } else {
@@ -92,7 +110,9 @@ pub fn set_mcp_servers_map(
         obj.remove("homepage");
         obj.remove("docs");
 
+        // 仅当系统中不存在时才插入
         out.insert(id.clone(), Value::Object(obj));
+        log::info!("添加新的 MCP 服务器到系统配置: {}", id);
     }
 
     {
